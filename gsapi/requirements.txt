@@ -1,14 +1,18 @@
-ipython
 Flask
 Flask-PyMongo
-Flask-Testing
+#Flask-Testing
+# flask-yamlconfig # http://pypi.python.org/pypi/Flask-YAMLConfig
 mimerender
 simplejson
 bpython
-schematics
-rawes
+#rawes
 pyes
-
+#pexpect
+sphinx
+#sphinx-apidoc
+#jinja2
+pyyaml
+-e git+git://github.com/j2labs/schematics.git#egg=schematics
 -e git+git://github.com/mongodb/mongo-python-driver.git#egg=pymongo
 fabric
 python-dateutil

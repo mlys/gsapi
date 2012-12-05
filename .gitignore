@@ -1,4 +1,4 @@
-*.pyc
+*pyc
 *.db
 *.pyo
 
@@ -17,5 +17,14 @@
 *.bak
 
 *.swp
-local_settings
+local_settings.py
+.DS_Store
+.project
+.pydevproject
 venv/
+
+*.project
+*.pydevproject
+org.eclipse.core.resources.prefs
+.metadata
+!docs/_static

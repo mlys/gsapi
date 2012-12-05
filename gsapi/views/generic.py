@@ -2,10 +2,7 @@
 from flask import make_response, jsonify, abort
 import os
 import json
-from extensions import validate
-from jsondatetime import loads
 import mimerender
-#from json import loads
 import json
 from flask import request
 from bson import ObjectId
@@ -14,14 +11,12 @@ from bson import json_util
 import re
 import datetime
 from flask import current_app
-#from flask.ext.pymongo import PyMongo
-from db import get_db, get_db2, get_db3
-#from models import model_classes_by_route, model_classes_by_id
+
 import models
 import controllers
-#from ex.app import mongo
-
-# from ex.extensions import db
+from utils.utils import mongo_json_object_hook
+from models.extensions import validate
+from utils.jsondatetime import loads
 
 mimerender  = mimerender.FlaskMimeRender()
 
@@ -31,6 +26,16 @@ render_html = lambda message: '<html><body>%s</body></html>'%message
 render_txt  = lambda message: message
 
 def get_document_link(model_name, id):
+    '''
+    Returns the link to the document
+
+    Parameters:
+        model_name -
+        id -
+
+    Returns
+        The document link
+    '''
     return "http://localhost:5000/%s/%s" % (model_name, id)
 
 
@@ -47,55 +52,99 @@ def prep_response(dct, status=200):
     resp.mimetype = mime
     return resp
 
-def put(class_name):
-    model           = getattr(models, class_name)
-    collection_name = model.meta['collection']
-
-    user_id = "50468de92558713d84b03fd7"
-
+def es(models):
     response = {}
-    status   = 200
-    docs     = []
+    links    = []
+    host     = request.url
 
-    # let's deserialize mongo objects
-    data = json.loads(request.data, object_hook=json_util.object_hook)
+    return prep_response(response, status = 200)
 
-    # expecting where
-    where = data['where']
-    patch = data['patch']
+def home(models):
+    response = {}
+    links    = []
+    host     = request.url
+    for model in models:
+        links.append("<link rel='child' title='%(name)s' href='%(modelURI)s' />" %
+            {'name':model, 'modelURI': host + model})
+    response['links'] = links
+    return prep_response(response, status = 200)
 
-    # validata patch
-    # init model for this doc
-    patch_errors    = validate(model, patch)
-    if patch_errors:
-        response['errors']        = patch_errors['errors']
-        response['total_errors']  = patch_errors['count']
-        status                    = 400
+def post(class_name):
+    from db import db
+    from es import es
+    generic  = controllers.Generic(db, es)
 
-        return prep_response(response, status = status)
+    #data = loads(request.data)
+    data = request.data
 
-    # until we get signals working
-    # manually include modified event details
-    # patch['mBy'] = user_id
-    patch['mBy'] = ObjectId(user_id)
-    patch['mOn'] = datetime.datetime.utcnow()
+    docs_to_post = json.loads(data, object_hook=json_util.object_hook)
 
-    db = get_db(current_app)
+    # if a dict, then stuff it into a list
+    if type(docs_to_post) == dict: docs_to_post = [docs_to_post]
 
-    # https://github.com/mongodb/mongo-python-driver/blob/master/pymongo/collection.py#L1035
-    resp = db.command('findAndModify', collection_name,
-        query = where,
-        update = {"$set": patch},
-        new = True
-    )
+    args = dict(request.view_args.items() + request.args.items())
+    args['docs'] = docs_to_post
 
-    response['collection']    = collection_name
-    response['total_invalid'] = 0
-    response['id']            = id.__str__()
-    response['doc']           = resp['value']
+    response = generic.post(**args)
 
-    return prep_response(response, status = status)
+    return prep_response(response['response'], status = response['status'])
 
+
+def put(class_name):
+    from db import db
+    from es import es
+    generic  = controllers.Generic(db, es)
+
+    data          = json.loads(request.data, object_hook=json_util.object_hook)
+
+    args          = dict(request.view_args.items() + request.args.items())
+    args['data']  = data
+    args['usrid'] = "50468de92558713d84b03fd7"
+
+    response      = generic.put(**args)
+
+    return prep_response(response['response'], status = response['status'])
+
+def get(class_name, id=None):
+    from db import db
+    generic  = controllers.Generic(db)
+
+    parsed_args = {}
+    for k, v in dict(request.args.items()).iteritems():
+        parsed_args[k] = json.loads(v, object_hook=mongo_json_object_hook)
+
+
+    args = dict(request.view_args.items() + parsed_args.items())
+    #args = dict(request.view_args.items() + request.args.items())
+
+
+    #if 'where' in args:
+        #args['where'] = dumps(json.loads(args['where'], object_hook=mongo_json_object_hook))
+
+    resp = generic.get(**args)
+
+    links    = []
+    host     = 'http://' + request.environ['HTTP_HOST']
+    links.append("<link rel='parent' title='%(name)s' href='%(modelURI)s' />" %
+            {'name':class_name, 'modelURI': host + class_name})
+    links.append("<link rel='model' title='%(name)s' href='%(modelURI)s' />" %
+            {'name':class_name, 'modelURI': host + class_name})
+
+    # need to add a link to each doc along with etag and updated i
+    # links.append("<link rel='model' title='%(name)s' href='%(modelURI)s' />" %
+    #         {'name':class_name, 'modelURI': host + class_name})
+
+    resp['response']['links'] = links
+
+    return prep_response(resp['response'], status = resp['status'])
+
+
+
+
+def remove(collection, id):
+    # TODO test
+    col = models[model].meta['collection']
+    return db[col].remove({"_id":ObjectId(id)})
 
 def patch_embedded(collection, id, embedded):
     # get collection name for this model
@@ -256,84 +305,3 @@ def post_embedded(collection, id, embedded):
     response[collection] = docs
 
     return prep_response(response, status = status)
-
-def post(class_name):
-    model           = getattr(models, class_name)
-    collection_name = model.meta['collection']
-
-    db              = get_db(current_app)
-    collection      = db[collection_name]
-    response        = {}
-    status          = 200
-    docs            = []
-
-    # let's deserialize mongo objects
-    docs_to_post = json.loads(request.data, object_hook=json_util.object_hook)
-
-    # if a dict, then stuff it into a list
-    if type(docs_to_post) == dict: docs_to_post = [docs_to_post]
-
-    post_errors = []
-    total_errors = 0
-    for doc in docs_to_post:
-        errors = {}
-        user_id = "50468de92558713d84b03fd7"
-
-        # need to stuff in class_name
-        doc['_c']     = class_name
-
-        # Validate
-        doc_errors    = validate(model, doc)
-        if doc_errors:
-            total_errors += doc_errors['count']
-            post_errors.append(doc_errors)
-            continue
-
-        # init model for this doc
-        m   = model(**doc)
-
-        #log date time user involved with this event
-        m.logit(user_id, 'post')
-
-        # need to stuff into mongo
-        doc_validated    = m.to_python()
-        try:
-            doc_validated['_c'] = m.meta['_c']
-        except:
-            pass
-
-        dumped = dumps(doc_validated)
-        doc_info         = {}
-
-        id               = str(collection.insert(doc_validated, safe=True))
-        doc_info['id']   = id
-        doc_info['doc']  = doc_validated
-        doc_info['link'] = get_document_link(class_name, id)
-
-        docs.append(doc_info)
-
-    response['total_inserted'] = len(docs)
-
-    if post_errors:
-        response['total_invalid'] = len(post_errors)
-        response['errors']        = post_errors
-        response['total_errors']  = total_errors
-        status                    = 400
-    else:
-        response['total_invalid'] = 0
-
-    response['docs'] = docs
-
-    return prep_response(response, status = status)
-def get(class_name, id=None):
-    db              = get_db3()
-
-    args = dict(request.view_args.items() + request.args.items())
-
-    resp = controllers.generic.get(db, **args)
-
-    return prep_response(resp['response'], status = resp['status'])
-
-def remove(collection, id):
-    col = models[model].meta['collection']
-    return db[col].remove({"_id":ObjectId(id)})
